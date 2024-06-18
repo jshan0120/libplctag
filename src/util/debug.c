@@ -50,7 +50,7 @@
  */
 
 
-static int global_debug_level = DEBUG_NONE;
+static int global_debug_level = DEBUG_DETAIL;
 static lock_t thread_num_lock = LOCK_INIT;
 static volatile uint32_t thread_num = 1;
 static lock_t logger_callback_lock = LOCK_INIT;
