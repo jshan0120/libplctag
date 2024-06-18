@@ -7,7 +7,7 @@ fi
 
 tag_format='--tag='
 declare -a input_tags
-command=('./ab_server.exe' '--debug' '--plc=ControlLogix' '--path=1,0')
+command=('./ab_server' '--debug' '--plc=ControlLogix' '--path=1,0')
 
 while read -r line || [[ -n "$line" ]]; do
     line_mod=$(echo $line | tr -d '\r')
@@ -24,5 +24,4 @@ done < $1
 
 echo "Run Commnad: ${command[@]} ${input_tags[@]}"
 
-OUTPUT_FILE="./command.txt"
 "${command[@]}" "${input_tags[@]}"
