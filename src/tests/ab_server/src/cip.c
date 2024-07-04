@@ -49,6 +49,7 @@ const uint8_t CIP_WRITE[] = { 0x4D };
 const uint8_t CIP_RMW[] = { 0x4E, 0x02, 0x20, 0x02, 0x24, 0x01 };
 const uint8_t CIP_READ_FRAG[] = { 0x52 };
 const uint8_t CIP_WRITE_FRAG[] = { 0x53 };
+const uint8_t CIP_READ_BUNDLE[] = { 0x0a };
 
 
 /* non-tag commands */
@@ -383,6 +384,10 @@ slice_s handle_read_request(slice_s input, slice_s output, plc_s *plc)
     size_t packet_capacity = 0;
     bool need_frag = false;
     size_t amount_to_copy = 0;
+    uint16_t request_count = 1;
+    size_t output_offset = 0;
+    size_t request_offset = 0;
+    uint16_t request_count_offset = 2;
 
     /* Omron does not support fragmented read. */
     if(plc->plc_type == PLC_OMRON && read_cmd == CIP_READ_FRAG[0]) {
@@ -395,109 +400,144 @@ slice_s handle_read_request(slice_s input, slice_s output, plc_s *plc)
         return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
     }
 
-    offset = 1;
-    tag_segment_size = slice_get_uint8(input, offset); offset++;
-
-    /* check that we have enough space. */
-    if((slice_len(input) + (read_cmd == CIP_READ[0] ? 2 : 6) - 2) < (tag_segment_size * 2)) {
-        info("Request does not have enough space for element count and byte offset!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+    
+    if(read_cmd == CIP_READ_BUNDLE[0]) {
+        offset = 6;
+        request_count = slice_get_uint16_le(input, offset);
+        offset += 3 + (size_t)2 * request_count;
+    }
+    else {
+        offset = 1;
     }
 
-    if(!process_tag_segment(plc, slice_from_slice(input, offset, (size_t)(tag_segment_size * 2)), &tag, &read_start_offset)) {
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
+    for(uint16_t i = 0; i < request_count; i++) {
+        tag_segment_size = slice_get_uint8(input, offset); offset++;
 
-    /* step past the tag segment. */
-    offset += (size_t)(tag_segment_size * 2);
-
-    element_count = slice_get_uint16_le(input, offset); offset += 2;
-
-    if(plc->plc_type == PLC_OMRON) {
-        if(element_count != 1) {
-            info("Omron PLC requires element count to be 1, found %d!", element_count);
+        /* check that we have enough space. */
+        if((slice_len(input) + (read_cmd == CIP_READ[0] ? 2 : 6) - 2) < (tag_segment_size * 2)) {
+            info("Request does not have enough space for element count and byte offset!");
             return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-        } else {
-            /* all good, now fake it with an element count that is the full tag. */
-            element_count = (uint16_t)tag->elem_count;
         }
-    }
 
-    if(read_cmd == CIP_READ_FRAG[0]) {
+        if(!process_tag_segment(plc, slice_from_slice(input, offset, (size_t)(tag_segment_size * 2)), &tag, &read_start_offset)) {
+            return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+        }
+
+        /* step past the tag segment. */
+        offset += (size_t)(tag_segment_size * 2);
+
+        element_count = slice_get_uint16_le(input, offset); offset += 2;
+
+        if(plc->plc_type == PLC_OMRON) {
+            if(element_count != 1) {
+                info("Omron PLC requires element count to be 1, found %d!", element_count);
+                return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+            } else {
+                /* all good, now fake it with an element count that is the full tag. */
+                element_count = (uint16_t)tag->elem_count;
+            }
+        }
+
         byte_offset = slice_get_uint32_le(input, offset); offset += 4;
-    }
+        /* double check the size of the request. */
+        if(i == request_count - 1) {
+            if(offset != slice_len(input)) {
+                info("Request size does not match CIP request size!");
+                return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+            }
+        }
+        else {
+            if(slice_get_uint8(input, offset) != 0x52) {
+                info("Request size does not match CIP request size!");
+                return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
+            }
+            offset++;
+        }
 
-    /* double check the size of the request. */
-    if(offset != slice_len(input)) {
-        info("Request size does not match CIP request size!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
-    }
+        /* check the offset bounds. */
+        tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
 
-    /* check the offset bounds. */
-    tag_data_length = (size_t)(tag->elem_count * tag->elem_size);
+        info("tag_data_length = %d", tag_data_length);
 
-    info("tag_data_length = %d", tag_data_length);
+        /* get the amount requested. */
+        total_request_size = (size_t)(element_count * tag->elem_size);
 
-    /* get the amount requested. */
-    total_request_size = (size_t)(element_count * tag->elem_size);
+        info("total_request_size = %d", total_request_size);
 
-    info("total_request_size = %d", total_request_size);
+        /* check the amount */
+        if(read_start_offset + total_request_size > tag_data_length) {
+            info("request asks for too much data!");
+            return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+        }
 
-    /* check the amount */
-    if(read_start_offset + total_request_size > tag_data_length) {
-        info("request asks for too much data!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        /* check to make sure that the offset passed is within the bounds. */
+        if(read_start_offset + byte_offset > tag_data_length) {
+            info("request offset is past the end of the tag!");
+            return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
+        }
 
-    /* check to make sure that the offset passed is within the bounds. */
-    if(read_start_offset + byte_offset > tag_data_length) {
-        info("request offset is past the end of the tag!");
-        return make_cip_error(output, read_cmd | CIP_DONE, CIP_ERR_EXTENDED, true, CIP_ERR_EX_TOO_LONG);
-    }
+        /* do we need to fragment the result? */
+        remaining_size = total_request_size - byte_offset;
+        packet_capacity = slice_len(output) - 6; /* MAGIC - CIP header plus data type bytes is 6 bytes. */
 
-    /* do we need to fragment the result? */
-    remaining_size = total_request_size - byte_offset;
-    packet_capacity = slice_len(output) - 6; /* MAGIC - CIP header plus data type bytes is 6 bytes. */
+        info("packet_capacity = %d", packet_capacity);
 
-    info("packet_capacity = %d", packet_capacity);
+        if(remaining_size > packet_capacity) {
+            need_frag = true;
+        } else {
+            need_frag = false;
+        }
 
-    if(remaining_size > packet_capacity) {
-        need_frag = true;
-    } else {
-        need_frag = false;
-    }
+        info("need_frag = %s", need_frag ? "true" : "false");
 
-    info("need_frag = %s", need_frag ? "true" : "false");
+        /* start making the response. */
+        if(request_count > 1) {
+            /* store the result of bundled request */
+            if(i == 0) {
+                slice_set_uint8(output, output_offset, read_cmd | CIP_DONE); output_offset++;
+                slice_set_uint8(output, output_offset, 0); output_offset++; /* padding/reserved. */
+                slice_set_uint8(output, output_offset, (need_frag ? CIP_ERR_FRAG : CIP_OK)); output_offset++; /* no error. */
+                slice_set_uint8(output, output_offset, 0); output_offset++; /* no extra error fields. */
 
-    /* start making the response. */
-    offset = 0;
-    slice_set_uint8(output, offset, read_cmd | CIP_DONE); offset++;
-    slice_set_uint8(output, offset, 0); offset++; /* padding/reserved. */
-    slice_set_uint8(output, offset, (need_frag ? CIP_ERR_FRAG : CIP_OK)); offset++; /* no error. */
-    slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
+                read_cmd = CIP_READ_FRAG[0];
+                request_count_offset = output_offset;
+                slice_set_uint16_le(output, output_offset, request_count); output_offset += 2;
+                request_offset = output_offset;
+                output_offset += 2 * request_count;
+            }
 
-    /* copy the data type. */
-    slice_set_uint16_le(output, offset, tag->tag_type); offset += 2;
+            /* store the offset of request data */
+            slice_set_uint16_le(output, request_offset, (uint16_t)(output_offset - request_count_offset)); request_offset += 2;
+        }
 
-    /* how much data to copy? */
-    amount_to_copy = (remaining_size < packet_capacity ? remaining_size : packet_capacity);
-    if(amount_to_copy > 8) {
-        /* align to 8-byte chunks */
-        amount_to_copy &= 0xFFFFC;
-    }
+        slice_set_uint8(output, output_offset, read_cmd | CIP_DONE); output_offset++;
+        slice_set_uint8(output, output_offset, 0); output_offset++; /* padding/reserved. */
+        slice_set_uint8(output, output_offset, (need_frag ? CIP_ERR_FRAG : CIP_OK)); output_offset++; /* no error. */
+        slice_set_uint8(output, output_offset, 0); output_offset++; /* no extra error fields. */
 
-    info("amount_to_copy = %d", amount_to_copy);
-    info("copy start location = %d", offset);
-    info("output space = %d", slice_len(output) - offset);
+        /* copy the data type. */
+        slice_set_uint16_le(output, output_offset, tag->tag_type); output_offset += 2;
 
-    /* FIXME - use memcpy */
-    for(size_t i=0; i < amount_to_copy; i++) {
-        slice_set_uint8(output, offset + i, tag->data[byte_offset + i]);
-    }
+        /* how much data to copy? */
+        amount_to_copy = (remaining_size < packet_capacity ? remaining_size : packet_capacity);
+        if(amount_to_copy > 8) {
+            /* align to 8-byte chunks */
+            amount_to_copy &= 0xFFFFC;
+        }
 
-    offset += amount_to_copy;
+        info("amount_to_copy = %d", amount_to_copy);
+        info("copy start location = %d", output_offset);
+        info("output space = %d", slice_len(output) - output_offset);
 
-    return slice_from_slice(output, 0, offset);
+        /* FIXME - use memcpy */
+        for(size_t i=0; i < amount_to_copy; i++) {
+            slice_set_uint8(output, output_offset + i, tag->data[byte_offset + i]);
+        }
+
+        output_offset += amount_to_copy;
+    }    
+
+    return slice_from_slice(output, 0, output_offset);
 }
 
 
@@ -571,7 +611,8 @@ slice_s handle_write_request(slice_s input, slice_s output, plc_s *plc)
     info("tag_data_length = %d", tag_data_length);
 
     /* get the write amount requested. */
-    total_request_size = slice_len(input) - offset;
+    size_t request_size_padding = tag->elem_count == 1 ? 1 : 0;
+    total_request_size = slice_len(input) - offset - request_size_padding;
 
     info("total_request_size = %d", total_request_size);
 

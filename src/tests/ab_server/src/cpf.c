@@ -155,7 +155,7 @@ slice_s handle_cpf_connected(slice_s input, slice_s output, plc_s *plc)
     cpf_co_header_s header;
 
     /* we must have some sort of payload. */
-    if(slice_len(input) <= CPF_UCONN_HEADER_SIZE) {
+    if(slice_len(input) <= CPF_CONN_HEADER_SIZE) {
         info("Unusable size of connected CPF packet!");
         return slice_make_err(EIP_ERR_BAD_REQUEST);
     }
