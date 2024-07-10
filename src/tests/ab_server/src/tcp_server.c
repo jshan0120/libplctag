@@ -45,6 +45,8 @@ struct tcp_server {
     slice_s buffer;
     slice_s (*handler)(slice_s input, slice_s output, void *context);
     void *context;
+    int num_accepted_sock;
+    fd_set accept_fd_set;
 };
 
 
@@ -70,15 +72,115 @@ tcp_server_p tcp_server_create(const char *host, const char *port, slice_s buffe
 void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
 {
     int client_fd;
-    bool done = false;
 
-    info("Waiting for new client connection.");
+    int num_accept_ready;
+
+    fd_set temp_fd_set;
+    int client_sock;
+
+    server->num_accepted_sock = 0;
+    /* zero out the file descriptor set. */
+    FD_ZERO(&server->accept_fd_set);
+
+    /* set our socket's bit in the set. */
+    FD_SET(server->sock_fd, &server->accept_fd_set);
+
+    /* set the timeout to zero */
+    TIMEVAL timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
+
+    /* set the maximum number of fds */
+    int fd_max = server->sock_fd;
 
     do {
-        client_fd = socket_accept(server->sock_fd);
+        temp_fd_set = server->accept_fd_set;
 
+        /* check changed fd */
+        int num_accept_ready = select(fd_max + 1, &temp_fd_set, NULL, NULL, &timeout);
+        if(num_accept_ready < 0) {
+            info("Error selecting the listen socket! error=%d", WSAGetLastError());
+            return SOCKET_ERR_SELECT;
+        } else if(num_accept_ready == 0) {
+            util_sleep_ms(1);
+            continue;
+        } else if(num_accept_ready > MAX_CLIENTS) {
+            info("WARN: Too much client required");
+            return SOCKET_ERR_ACCEPT;
+        }
+        
+        if(server->num_accepted_sock != num_accept_ready) {
+            info("Ready to accept on %d sockets.", num_accept_ready);
+            server->num_accepted_sock = num_accept_ready;
+        }
+
+#ifdef IS_WINDOWS
+        HANDLE threads[MAX_CLIENTS];
+#else
+        pthread_t threads[MAX_CLIENTS];
+#endif
+        int client_seq = 0;
+
+        if(FD_ISSET(server->sock_fd, &temp_fd_set)) {
+            client_sock = (int)accept(server->sock_fd, NULL, NULL);
+            info("Accept socket %d.", client_sock);
+            FD_SET(client_sock, &server->accept_fd_set);
+            if(fd_max < client_sock) {
+                fd_max = client_sock;
+            }
+
+            thread_param param;
+            param.server = server;
+            param.client_sock = client_sock;
+            param.client_seq = client_seq;
+
+#ifdef IS_WINDOWS
+            threads[client_seq] = CreateThread(NULL, 0, process_loop,
+                                               (void *)&param, (DWORD)0, (LPDWORD)NULL);
+#else
+            pthread_create(&threads[client_seq], NULL, process_loop, (void *)&param);
+#endif
+            client_seq++;
+        }
+
+        /* wait a bit to give back the CPU. */
+        util_sleep_ms(1);
+
+    } while(!*terminate);
+    terminated = true;
+
+    for(int fd = 0; fd < fd_max + 1; fd++) {
+        if(fd != server->sock_fd && FD_ISSET(fd, &server->accept_fd_set)) {
+            socket_close(fd);
+        }
+    }
+}
+
+
+
+void tcp_server_destroy(tcp_server_p server)
+{
+    if(server) {
+        if(server->sock_fd >= 0) {
+            socket_close(server->sock_fd);
+            server->sock_fd = INT_MIN;
+        }
+        free(server);
+    }
+}
+
+void process_loop(LPVOID data)
+{
+    thread_param *param = (thread_param *)data;
+    tcp_server_p server = param->server;
+    int client_fd = param->client_sock;
+    int client_seq = param->client_seq;
+
+    bool done = false;
+    do
+    {
         if(client_fd >= 0) {
-            slice_s tmp_input = server->buffer;
+            slice_s tmp_input = get_server_buffer(server, client_seq);
             slice_s tmp_output;
             int rc;
 
@@ -93,11 +195,12 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
                 if((rc = slice_has_err(tmp_input))) {
                     info("WARN: error response reading socket! error %d", rc);
                     rc = TCP_SERVER_DONE;
-                    break;
+                    remove_client(server, client_fd);
+                    return;
                 }
 
                 /* try to process the packet. */
-                tmp_output = server->handler(tmp_input, server->buffer, server->context);
+                tmp_output = server->handler(tmp_input, get_server_buffer(server, client_seq), server->context);
 
                 /* check the response. */
                 if(!slice_has_err(tmp_output)) {
@@ -111,7 +214,7 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
                         break;
                     } else {
                         /* all good. Reset the buffers etc. */
-                        tmp_input = server->buffer;
+                        tmp_input = slice_from_slice(server->buffer, 0, 2100);
                         rc = TCP_SERVER_PROCESSED;
                     }
                 } else {
@@ -122,7 +225,7 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
                             break;
 
                         case TCP_SERVER_INCOMPLETE:
-                            tmp_input = slice_from_slice(server->buffer, slice_len(tmp_input), slice_len(server->buffer) - slice_len(tmp_input));
+                            tmp_input = get_server_buffer(server, client_seq);
                             break;
 
                         case TCP_SERVER_PROCESSED:
@@ -141,26 +244,22 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
             } while(rc == TCP_SERVER_INCOMPLETE || rc == TCP_SERVER_PROCESSED);
 
             /* done with the socket */
-            socket_close(client_fd);
+            remove_client(server, client_fd);
         } else if (client_fd != SOCKET_STATUS_OK) {
             /* There was an error either opening or accepting! */
             info("WARN: error while trying to open/accept the client socket.");
         }
-
-        /* wait a bit to give back the CPU. */
-        util_sleep_ms(1);
-    } while(!done && !*terminate);
+    } while(!done && !terminated);
 }
 
-
-
-void tcp_server_destroy(tcp_server_p server)
+slice_s get_server_buffer(tcp_server_p server, int seq)
 {
-    if(server) {
-        if(server->sock_fd >= 0) {
-            socket_close(server->sock_fd);
-            server->sock_fd = INT_MIN;
-        }
-        free(server);
-    }
+    return slice_from_slice(server->buffer, seq, 4200 / MAX_CLIENTS);
+}
+
+void remove_client(tcp_server_p server, int fd)
+{
+    FD_CLR(fd, &server->accept_fd_set);
+    socket_close(fd);
+    server->num_accepted_sock--;
 }

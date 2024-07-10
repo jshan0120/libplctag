@@ -33,9 +33,28 @@
 
 #pragma once
 
+#include "compat.h"
+
+#ifdef IS_WINDOWS
+    #include <windows.h>
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+#else
+    #include <pthread.h>
+    #include <arpa/inet.h>
+    #include <errno.h>
+    #include <netdb.h>
+    #include <netinet/in.h>
+    #include <sys/socket.h>
+    #include <sys/time.h>
+    #include <sys/types.h>
+    #include <unistd.h>
+#endif
 #include <signal.h>
 #include <stdbool.h>
 #include "slice.h"
+
+#define MAX_CLIENTS 2
 
 typedef enum {
     TCP_SERVER_INCOMPLETE = 100001,
@@ -47,7 +66,19 @@ typedef enum {
 
 typedef struct tcp_server *tcp_server_p;
 
+typedef struct
+{
+    tcp_server_p server;
+    int client_sock;
+    int client_seq;
+} thread_param;
+
+static bool terminated = false;
+
 extern tcp_server_p tcp_server_create(const char *host, const char *port, slice_s buffer, slice_s (*handler)(slice_s input, slice_s output, void *context), void *context);
 extern void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate);
 extern void tcp_server_destroy(tcp_server_p server);
+extern void process_loop(LPVOID data);
+extern slice_s get_server_buffer(tcp_server_p server, int seq);
+extern void remove_client(tcp_server_p server, int fd);
 

@@ -162,6 +162,7 @@ slice_s handle_forward_open(slice_s input, slice_s output, plc_s *plc)
     size_t offset = 0;
     uint8_t fo_cmd = slice_get_uint8(input, 0);
     forward_open_s fo_req = {0};
+    int client_seq;
 
     info("Checking Forward Open request:");
     slice_dump(input);
@@ -232,7 +233,13 @@ slice_s handle_forward_open(slice_s input, slice_s output, plc_s *plc)
 
     /* all good if we got here. */
     plc->client_connection_id = fo_req.client_conn_id;
-    plc->client_connection_serial_number = fo_req.conn_serial_number;
+    if(plc->client_connection_serial_number[0] == 0) {
+        plc->client_connection_serial_number[0] = fo_req.conn_serial_number;
+        client_seq = 0;
+    } else {
+        plc->client_connection_serial_number[1] = fo_req.conn_serial_number;
+        client_seq = 1;
+    }
     plc->client_vendor_id = fo_req.orig_vendor_id;
     plc->client_serial_number = fo_req.orig_serial_number;
     plc->client_to_server_rpi = fo_req.client_to_server_rpi;
@@ -257,7 +264,7 @@ slice_s handle_forward_open(slice_s input, slice_s output, plc_s *plc)
 
     slice_set_uint32_le(output, offset, plc->server_connection_id); offset += 4;
     slice_set_uint32_le(output, offset, plc->client_connection_id); offset += 4;
-    slice_set_uint16_le(output, offset, plc->client_connection_serial_number); offset += 2;
+    slice_set_uint16_le(output, offset, plc->client_connection_serial_number[client_seq]); offset += 2;
     slice_set_uint16_le(output, offset, plc->client_vendor_id); offset += 2;
     slice_set_uint32_le(output, offset, plc->client_serial_number); offset += 4;
     slice_set_uint32_le(output, offset, plc->client_to_server_rpi); offset += 4;
@@ -330,9 +337,10 @@ slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc)
     }
 
     /* Check the values we got. */
-    if(plc->client_connection_serial_number != fc_req.client_connection_serial_number) {
+    if(plc->client_connection_serial_number[0] != fc_req.client_connection_serial_number &&
+       plc->client_connection_serial_number[1] != fc_req.client_connection_serial_number) {
         /* FIXME - send back the right error. */
-        info("Forward close connection serial number, %x, did not match the connection serial number originally passed, %x!", fc_req.client_connection_serial_number, plc->client_connection_serial_number);
+        info("Forward close connection serial number, %x, did not match the connection serial number originally passed, %x and %x!", fc_req.client_connection_serial_number, plc->client_connection_serial_number[0], plc->client_connection_serial_number[1]);
         return make_cip_error(output, slice_get_uint8(input, 0) | CIP_DONE, CIP_ERR_UNSUPPORTED, false, 0);
     }
     if(plc->client_vendor_id != fc_req.client_vendor_id) {
@@ -353,7 +361,13 @@ slice_s handle_forward_close(slice_s input, slice_s output, plc_s *plc)
     slice_set_uint8(output, offset, 0); offset++; /* no error. */
     slice_set_uint8(output, offset, 0); offset++; /* no extra error fields. */
 
-    slice_set_uint16_le(output, offset, plc->client_connection_serial_number); offset += 2;
+    if(plc->client_connection_serial_number[0] == fc_req.client_connection_serial_number) {
+        slice_set_uint16_le(output, offset, plc->client_connection_serial_number[0]); offset += 2;
+        plc->client_connection_serial_number[0] = 0;
+    } else {
+        slice_set_uint16_le(output, offset, plc->client_connection_serial_number[1]); offset += 2;
+        plc->client_connection_serial_number[1] = 0;
+    }
     slice_set_uint16_le(output, offset, plc->client_vendor_id); offset += 2;
     slice_set_uint32_le(output, offset, plc->client_serial_number); offset += 4;
 

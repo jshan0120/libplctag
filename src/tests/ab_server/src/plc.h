@@ -82,6 +82,8 @@ typedef enum {
     PLC_MICROLOGIX
 } plc_type_t;
 
+#define MAX_CLIENTS 2
+
 /* Define the context that is passed around. */
 typedef struct {
     plc_type_t plc_type;
@@ -97,7 +99,7 @@ typedef struct {
     uint32_t server_to_client_rpi;
     uint32_t client_connection_id;
     uint16_t client_connection_seq;
-    uint16_t client_connection_serial_number;
+    uint16_t client_connection_serial_number[MAX_CLIENTS];
     uint16_t client_vendor_id;
     uint32_t client_serial_number;
     uint32_t client_to_server_rpi;
