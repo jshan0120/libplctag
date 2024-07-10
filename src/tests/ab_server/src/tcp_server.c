@@ -76,7 +76,6 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
     int num_accept_ready;
 
     fd_set temp_fd_set;
-    int client_sock;
 
     server->num_accepted_sock = 0;
     /* zero out the file descriptor set. */
@@ -86,7 +85,7 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
     FD_SET(server->sock_fd, &server->accept_fd_set);
 
     /* set the timeout to zero */
-    TIMEVAL timeout;
+    struct timeval timeout;
     timeout.tv_sec = 0;
     timeout.tv_usec = 0;
 
@@ -99,14 +98,14 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
         /* check changed fd */
         int num_accept_ready = select(fd_max + 1, &temp_fd_set, NULL, NULL, &timeout);
         if(num_accept_ready < 0) {
-            info("Error selecting the listen socket! error=%d", WSAGetLastError());
-            return SOCKET_ERR_SELECT;
+            info("Error selecting the listen socket!");
+            continue;
         } else if(num_accept_ready == 0) {
             util_sleep_ms(1);
             continue;
         } else if(num_accept_ready > MAX_CLIENTS) {
             info("WARN: Too much client required");
-            return SOCKET_ERR_ACCEPT;
+            continue;
         }
         
         if(server->num_accepted_sock != num_accept_ready) {
@@ -122,16 +121,16 @@ void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate)
         int client_seq = 0;
 
         if(FD_ISSET(server->sock_fd, &temp_fd_set)) {
-            client_sock = (int)accept(server->sock_fd, NULL, NULL);
-            info("Accept socket %d.", client_sock);
-            FD_SET(client_sock, &server->accept_fd_set);
-            if(fd_max < client_sock) {
-                fd_max = client_sock;
+            client_fd = (int)accept(server->sock_fd, NULL, NULL);
+            info("Accept socket %d.", client_fd);
+            FD_SET(client_fd, &server->accept_fd_set);
+            if(fd_max < client_fd) {
+                fd_max = client_fd;
             }
 
             thread_param param;
             param.server = server;
-            param.client_sock = client_sock;
+            param.client_sock = client_fd;
             param.client_seq = client_seq;
 
 #ifdef IS_WINDOWS
