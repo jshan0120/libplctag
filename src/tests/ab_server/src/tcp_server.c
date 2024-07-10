@@ -169,7 +169,11 @@ void tcp_server_destroy(tcp_server_p server)
     }
 }
 
+#ifdef IS_WINDOWS
 void process_loop(LPVOID data)
+#else
+void process_loop(void *data)
+#endif
 {
     thread_param *param = (thread_param *)data;
     tcp_server_p server = param->server;

@@ -78,7 +78,11 @@ static bool terminated = false;
 extern tcp_server_p tcp_server_create(const char *host, const char *port, slice_s buffer, slice_s (*handler)(slice_s input, slice_s output, void *context), void *context);
 extern void tcp_server_start(tcp_server_p server, volatile sig_atomic_t *terminate);
 extern void tcp_server_destroy(tcp_server_p server);
+#ifdef IS_WINDOWS
 extern void process_loop(LPVOID data);
+#else
+extern void process_loop(void *data);
+#endif
 extern slice_s get_server_buffer(tcp_server_p server, int seq);
 extern void remove_client(tcp_server_p server, int fd);
 
