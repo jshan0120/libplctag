@@ -49,7 +49,7 @@ const uint8_t CIP_WRITE[] = { 0x4D };
 const uint8_t CIP_RMW[] = { 0x4E, 0x02, 0x20, 0x02, 0x24, 0x01 };
 const uint8_t CIP_READ_FRAG[] = { 0x52 };
 const uint8_t CIP_WRITE_FRAG[] = { 0x53 };
-const uint8_t CIP_READ_BUNDLE[] = { 0x0a, 0x02, 0x20, 0x02, 0x24 };
+const uint8_t CIP_READ_BUNDLE[] = { 0x0a };
 
 
 /* non-tag commands */
@@ -100,34 +100,24 @@ slice_s cip_dispatch_request(slice_s input, slice_s output, plc_s *plc)
 
     /* match the prefix and dispatch. */
     if(slice_match_bytes(input, CIP_READ, sizeof(CIP_READ))) {
-        info("Case CIP_READ");
         return handle_read_request(input, output, plc);
     } else if(slice_match_bytes(input, CIP_READ_FRAG, sizeof(CIP_READ_FRAG))) {
-        info("Case CIP_READ_FRAG");
         return handle_read_request(input, output, plc);
     } else if(slice_match_bytes(input, CIP_READ_BUNDLE, sizeof(CIP_READ_BUNDLE))){
-        info("Case CIP_READ_BUNDLE");
         return handle_read_request(input, output, plc);
     } else if(slice_match_bytes(input, CIP_WRITE, sizeof(CIP_WRITE))) {
-        info("Case CIP_WRITE");
         return handle_write_request(input, output, plc);
     } else if(slice_match_bytes(input, CIP_WRITE_FRAG, sizeof(CIP_WRITE_FRAG))) {
-        info("Case CIP_WRITE_FRAG");
         return handle_write_request(input, output, plc);
     } else if(slice_match_bytes(input, CIP_FORWARD_OPEN, sizeof(CIP_FORWARD_OPEN))) {
-        info("Case CIP_FORWARD_OPEN");
         return handle_forward_open(input, output, plc);
     } else if(slice_match_bytes(input, CIP_FORWARD_OPEN_EX, sizeof(CIP_FORWARD_OPEN_EX))) {
-        info("Case CIP_FORWARD_OPEN_EX");
         return handle_forward_open(input, output, plc);
     } else if(slice_match_bytes(input, CIP_FORWARD_CLOSE, sizeof(CIP_FORWARD_CLOSE))) {
-        info("Case CIP_FORWARD_CLOSE");
         return handle_forward_close(input, output, plc);
     } else if(slice_match_bytes(input, CIP_PCCC_EXECUTE, sizeof(CIP_PCCC_EXECUTE))) {
-        info("Case CIP_PCCC_EXECUTE");
         return dispatch_pccc_request(input, output, plc);
     } else {
-        info("Case NOT EXPECTED!");
             return make_cip_error(output, (uint8_t)(slice_get_uint8(input, 0) | (uint8_t)CIP_DONE), (uint8_t)CIP_ERR_UNSUPPORTED, false, (uint16_t)0);
     }
 }

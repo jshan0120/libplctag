@@ -272,7 +272,6 @@ slice_s socket_read(int sock, slice_s in_buf)
 #endif
             rc = 0;
         } else {
-            // info("Socket read error rc=%d.\n", rc);
             rc = SOCKET_ERR_READ;
         }
     }

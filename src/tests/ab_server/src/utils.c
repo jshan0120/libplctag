@@ -167,8 +167,6 @@ void error_impl(const char *func, int line, const char *templ, ...)
     va_end(va);
     fprintf(stderr,"\n");
 
-    fflush(stderr);
-
     exit(1);
 }
 
@@ -188,8 +186,6 @@ void info_impl(const char *func, int line, const char *templ, ...)
     vfprintf(stderr,templ,va);
     va_end(va);
     fprintf(stderr,"\n");
-
-    fflush(stderr);
 }
 
 
@@ -230,8 +226,6 @@ void slice_dump(slice_s s)
         /* output it, finally */
         fprintf(stderr,"%s\n", row_buf);
     }
-
-    fflush(stderr);
 }
 
 
